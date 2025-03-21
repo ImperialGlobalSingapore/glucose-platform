@@ -1,0 +1,1427 @@
+document.addEventListener('DOMContentLoaded', function() {
+    // DOM elements
+    const patientSelector = document.getElementById('patient-selector');
+    const patientInfoPanel = document.getElementById('patient-info-panel');
+    const dataInsightsPanel = document.getElementById('data-insights-panel');
+    const glucoseChart = document.getElementById('glucose-chart');
+    const timeButtons = document.querySelectorAll('.time-btn');
+    const zoomResetButton = document.getElementById('zoom-reset');
+    const fullscreenButton = document.getElementById('toggle-fullscreen');
+    
+    // Control elements
+    const initializeBtn = document.getElementById('initialize-btn');
+    const toggleFlowBtn = document.getElementById('toggle-flow-btn');
+    const attackBtn = document.getElementById('attack-btn');
+    const dataStatusDot = document.getElementById('data-status-dot');
+    const flowStatusDot = document.getElementById('flow-status-dot');
+    const attackStatusDot = document.getElementById('attack-status-dot');
+    const attackOverlay = document.getElementById('attack-overlay');
+    const attackMessage = document.getElementById('attack-message');
+    const attackStatus = document.getElementById('attack-status');
+    
+    // Data and state
+    let currentPatientId = null;
+    let glucoseData = [];
+    let timeRange = 3; // Default: 3 hours
+    let isRealTimeMode = false; // Flag for real-time mode
+    let plotlyChart = null;
+    
+    // Patient-specific states - key is patientId
+    const patientStates = {};
+    let dataUpdateInterval = null;
+    
+    // Initialize
+    initApplication();
+    
+    function initApplication() {
+        // We don't load patients list immediately anymore
+        // Instead, we wait for user to select a patient type
+        setupEventListeners();
+        setupAddPatientUI();
+    }
+    
+    function setupEventListeners() {
+        // Patient type selection
+        const patientTypeSelector = document.getElementById('patient-type-selector');
+        patientTypeSelector.addEventListener('change', function() {
+            const patientType = this.value;
+            if (patientType) {
+                fetchPatientsByType(patientType);
+            } else {
+                // Clear patient selector if no type is selected
+                const patientSelector = document.getElementById('patient-selector');
+                patientSelector.innerHTML = '<option value="">Select a patient</option>';
+                patientSelector.disabled = true;
+            }
+        });
+
+        // Patient selection
+        const patientSelector = document.getElementById('patient-selector');
+        patientSelector.disabled = true; // Disable until type is selected
+        patientSelector.addEventListener('change', function() {
+            const patientId = this.value;
+            if (patientId) {
+                // Add validation: ensure patient ID contains # symbol, indicating specific patient rather than type
+                if (!patientId.includes('#')) {
+                    console.error(`Invalid patient ID: ${patientId}`);
+                    alert('Please select a valid patient ID, must contain # symbol');
+                    this.value = '';
+                    return;
+                }
+                
+                // Clear any active data update intervals when switching patients
+                if (dataUpdateInterval) {
+                    clearInterval(dataUpdateInterval);
+                    dataUpdateInterval = null;
+                }
+                
+                // If switching patients, exit real-time mode
+                if (isRealTimeMode) {
+                    isRealTimeMode = false;
+                    // Deactivate real-time button
+                    timeButtons.forEach(btn => {
+                        if (btn.getAttribute('data-hours') === 'real-time') {
+                            btn.classList.remove('active');
+                        }
+                        if (btn.getAttribute('data-hours') === '3') {
+                            btn.classList.add('active');
+                            timeRange = 3;
+                        }
+                    });
+                }
+                
+                fetchPatientData(patientId);
+                updateControlsBasedOnPatient(patientId);
+            } else {
+                resetDisplay();
+            }
+        });
+        
+        // Time range buttons
+        timeButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const hoursValue = this.getAttribute('data-hours');
+                
+                // Only allow real-time mode if data flow is active for this patient
+                if (hoursValue === 'real-time') {
+                    if (!currentPatientId || !patientStates[currentPatientId] || 
+                        !patientStates[currentPatientId].isFlowActive) {
+                        alert('Please start data flow first before using real-time mode.');
+                        return;
+                    }
+                    
+                    // Check if there are any new data points generated
+                    if (patientStates[currentPatientId].realtimeData.length === 0) {
+                        alert('No real-time data available yet. Please wait for new data points.');
+                        return;
+                    }
+                }
+                
+                timeButtons.forEach(btn => btn.classList.remove('active'));
+                this.classList.add('active');
+                
+                const wasRealTimeMode = isRealTimeMode;
+                
+                // Check if real-time mode is selected
+                if (hoursValue === 'real-time') {
+                    isRealTimeMode = true;
+                    timeRange = 1; // Use 1 hour as initial display window for real-time mode
+                } else {
+                    isRealTimeMode = false;
+                    timeRange = parseInt(hoursValue);
+                }
+                
+                if (currentPatientId) {
+                    // If switching to or from real-time mode, need to update the chart configuration
+                    if (wasRealTimeMode !== isRealTimeMode && plotlyChart) {
+                        // We'll refetch and redraw the chart with new settings
+                        Plotly.purge(glucoseChart);
+                        plotlyChart = null;
+                    }
+                    fetchGlucoseData(currentPatientId);
+                }
+            });
+        });
+        
+        // Chart controls
+        zoomResetButton.addEventListener('click', resetZoom);
+        fullscreenButton.addEventListener('click', toggleFullscreen);
+        
+        // Control buttons
+        initializeBtn.addEventListener('click', function() {
+            if (currentPatientId) {
+                initializeData(currentPatientId);
+            } else {
+                alert('Please select a patient first');
+            }
+        });
+        
+        toggleFlowBtn.addEventListener('click', function() {
+            if (currentPatientId) {
+                toggleDataFlow(currentPatientId);
+            } else {
+                alert('Please select a patient first');
+            }
+        });
+        
+        attackBtn.addEventListener('click', function() {
+            if (currentPatientId) {
+                launchAttack(currentPatientId);
+            } else {
+                alert('Please select a patient first');
+            }
+        });
+    }
+    
+    // Fetch patients by type
+    function fetchPatientsByType(patientType) {
+        fetch(`/patients_by_type/${patientType}`)
+            .then(response => response.json())
+            .then(patients => {
+                // Get patient selector
+                const patientSelector = document.getElementById('patient-selector');
+                
+                // Reset patient selector
+                patientSelector.innerHTML = '<option value="">Select a patient</option>';
+                
+                if (patients.length === 0) {
+                    const option = document.createElement('option');
+                    option.value = "";
+                    option.textContent = "No patients of this type";
+                    option.disabled = true;
+                    patientSelector.appendChild(option);
+                } else {
+                    // Populate patient list for this type
+                    patients.forEach(patientId => {
+                        const option = document.createElement('option');
+                        option.value = patientId;
+                        option.textContent = patientId;
+                        patientSelector.appendChild(option);
+                    });
+                }
+                
+                // Enable patient selector
+                patientSelector.disabled = false;
+            })
+            .catch(error => {
+                console.error('Error loading patients by type:', error);
+                alert('Failed to load patients of this type, please try again.');
+            });
+    }
+    
+    // Get all patient types
+    function fetchPatientTypes() {
+        fetch('/patient_types')
+            .then(response => response.json())
+            .then(types => {
+                // Populate type selector if needed
+                // This is not necessary as we already defined types in HTML
+            })
+            .catch(error => console.error('Error loading patient types:', error));
+    }
+    
+    // Keep existing function but it's not used on initial load anymore
+    function fetchPatientList() {
+        fetch('/patients')
+            .then(response => response.json())
+            .then(patients => {
+                const patientSelector = document.getElementById('patient-selector');
+                
+                // Clear existing options and add default
+                patientSelector.innerHTML = '<option value="">Select a patient</option>';
+                
+                // Add each patient to the dropdown
+                patients.forEach(patientId => {
+                    const option = document.createElement('option');
+                    option.value = patientId;
+                    option.textContent = patientId;
+                    patientSelector.appendChild(option);
+                });
+            })
+            .catch(error => console.error('Error loading patient list:', error));
+    }
+    
+    // Fetch details for a specific patient
+    function fetchPatientData(patientId) {
+        if (!patientId) {
+            resetDisplay();
+            return;
+        }
+        
+        // Initialize patient state if it doesn't exist
+        if (!patientStates[patientId]) {
+            patientStates[patientId] = {
+                isDataInitialized: false,
+                isFlowActive: false,
+                isAttackActive: false,
+                realtimeData: []
+            };
+        }
+        
+        fetch(`/patient/${patientId}`)
+            .then(response => response.json())
+            .then(patient => {
+                currentPatientId = patientId;
+                
+                // Always display patient basic information
+                displayPatientInfo(patient);
+                
+                // Always show patient information panel
+                patientInfoPanel.classList.remove('hidden');
+                
+                // Update control UI based on patient state
+                updateControlsBasedOnPatient(patientId);
+                
+                // Check if data is initialized
+                if (patientStates[patientId].isDataInitialized) {
+                    // If data is initialized, get glucose data and display chart and insights
+                    fetchGlucoseData(patientId);
+                    dataInsightsPanel.classList.remove('hidden');
+                } else {
+                    // If data is not initialized, clear chart and show initialization prompt
+                    if (plotlyChart) {
+                        Plotly.purge(glucoseChart);
+                        plotlyChart = null;
+                    }
+                    
+                    glucoseChart.innerHTML = '<div class="no-data-message">Please click the "Initialize" button to initialize data for this patient.<br>(Please initialize data for this patient first.)</div>';
+                    
+                    // Apply some styles to the message
+                    const style = document.createElement('style');
+                    style.textContent = `
+                        .no-data-message {
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            height: 100%;
+                            color: #777;
+                            font-size: 1.2em;
+                            text-align: center;
+                            flex-direction: column;
+                            padding: 20px;
+                        }
+                    `;
+                    document.head.appendChild(style);
+                    
+                    // Hide insights panel until data is initialized
+                    dataInsightsPanel.classList.add('hidden');
+                }
+            })
+            .catch(error => {
+                console.error('Error loading patient data:', error);
+                resetDisplay();
+            });
+    }
+    
+    function fetchGlucoseData(patientId) {
+        // Don't fetch data if patient is not initialized
+        if (!patientStates[patientId] || !patientStates[patientId].isDataInitialized) {
+            return;
+        }
+        
+        // For real-time mode, we'll use the patient's stored real-time data
+        if (isRealTimeMode && patientStates[patientId] && patientStates[patientId].realtimeData.length > 0) {
+            // Only use real-time data - this includes only points added after Start Data was clicked
+            glucoseData = [...patientStates[patientId].realtimeData];
+            updateChart(glucoseData);
+            updateStats(glucoseData);
+            updateInsights(glucoseData);
+            return;
+        }
+        
+        const hours = timeRange || 3;
+        
+        fetch(`/glucose/${patientId}?hours=${hours}`)
+            .then(response => response.json())
+            .then(data => {
+                glucoseData = data;
+                
+                // Do NOT store this data in realtimeData - that array is ONLY for new points
+                // after "Start Data" is clicked
+                
+                updateChart(data);
+                updateStats(data);
+                updateInsights(data);
+            })
+            .catch(error => console.error('Error loading glucose data:', error));
+    }
+    
+    function displayPatientInfo(patient) {
+        document.getElementById('patient-id').textContent = patient.id || '-';
+        document.getElementById('patient-age').textContent = patient.age || '-';
+        
+        // Ensure weight is a number and not undefined
+        const weight = patient.weight !== undefined ? parseFloat(patient.weight) : null;
+        document.getElementById('patient-weight').textContent = weight !== null ? `${weight.toFixed(1)} kg` : '-';
+        
+        // Ensure height is a number and not undefined
+        const height = patient.height !== undefined ? parseFloat(patient.height) : null;
+        document.getElementById('patient-height').textContent = height !== null ? `${height.toFixed(1)} cm` : '-';
+        
+        document.getElementById('patient-diabetes').textContent = patient.has_diabetes ? 'Yes' : 'No';
+    }
+    
+    function updateChart(data) {
+        if (data.length === 0) return;
+        
+        // Extract timestamps and glucose values
+        const timestamps = data.map(d => d.timestamp);
+        const glucoseValues = data.map(d => d.glucose);
+        
+        // Create range bounds for coloring
+        const highRange = [];
+        const normalRange = [];
+        const lowRange = [];
+        
+        for (let i = 0; i < glucoseValues.length; i++) {
+            const value = glucoseValues[i];
+            
+            if (value > 180) {
+                highRange.push(value);
+                normalRange.push(null);
+                lowRange.push(null);
+            } else if (value >= 70) {
+                highRange.push(null);
+                normalRange.push(value);
+                lowRange.push(null);
+            } else {
+                highRange.push(null);
+                normalRange.push(null);
+                lowRange.push(value);
+            }
+        }
+        
+        // For real-time mode, we need a combined trace to ensure points are connected
+        let traces = [];
+        
+        if (isRealTimeMode && data.length <= 20) {  // If we have a small number of realtime points
+            // Sort data by timestamp to ensure correct display order
+            const sortedIndices = timestamps.map((_, idx) => idx)
+                .sort((a, b) => new Date(timestamps[a]) - new Date(timestamps[b]));
+            
+            const sortedTimestamps = sortedIndices.map(i => timestamps[i]);
+            const sortedGlucoseValues = sortedIndices.map(i => glucoseValues[i]);
+            
+            // Add a single combined trace with markers+lines to ensure connection between points
+            traces.push({
+                x: sortedTimestamps,
+                y: sortedGlucoseValues,
+                type: 'scatter',
+                mode: 'lines+markers',  // Use both lines and markers
+                name: 'Glucose',
+                line: {
+                    color: '#2ECC71',  // Default color
+                    width: 2
+                },
+                marker: {
+                    size: 6,
+                    color: sortedGlucoseValues.map(value => {
+                        // Color markers based on glucose ranges
+                        if (value > 180) return '#E74C3C';  // High
+                        if (value >= 70) return '#2ECC71';  // Normal
+                        return '#F39C12';  // Low
+                    })
+                }
+            });
+        } else {
+            // Use the standard 3 traces for non-realtime mode or when we have many points
+            traces = [
+                {
+                    x: timestamps,
+                    y: highRange,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'High',
+                    line: {
+                        color: '#E74C3C',
+                        width: 2
+                    }
+                },
+                {
+                    x: timestamps,
+                    y: normalRange,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'Normal',
+                    line: {
+                        color: '#2ECC71',
+                        width: 2
+                    }
+                },
+                {
+                    x: timestamps,
+                    y: lowRange,
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'Low',
+                    line: {
+                        color: '#F39C12',
+                        width: 2
+                    }
+                }
+            ];
+        }
+        
+        // X-axis settings
+        let xaxisSettings = {
+            title: 'Time',
+            type: 'date',
+            tickformat: '%H:%M:%S\n%b %d',  // Include seconds in the time format
+            showgrid: true,
+            gridcolor: '#E1E5EB',
+            fixedrange: false // Allow x-axis zooming
+        };
+        
+        // Y-axis settings - always fixed range in real-time mode
+        let yaxisSettings = {
+            title: 'Glucose (mg/dL)',
+            range: [40, 300],
+            showgrid: true,
+            gridcolor: '#E1E5EB',
+            fixedrange: isRealTimeMode // Y-axis is locked in real-time mode
+        };
+        
+        // For real-time mode, set fixed time window
+        if (isRealTimeMode && data.length > 0) {
+            // Get the timestamp of the newest data point
+            const sortedTimestamps = [...timestamps].sort((a, b) => new Date(b) - new Date(a));
+            const latestTimestamp = new Date(sortedTimestamps[0]);
+            
+            // Start from beginning and extend to current time + a little buffer
+            const firstTimestamp = new Date(Math.min(...timestamps.map(t => new Date(t))));
+            const endTime = new Date(latestTimestamp.getTime() + 10000); // Add 10 seconds buffer
+            
+            // Set the x-axis range to show all data points plus some padding
+            xaxisSettings.range = [firstTimestamp, endTime];
+            
+            // For very few points, make sure we have at least a minimum window (30 seconds)
+            if (endTime - firstTimestamp < 30000) {
+                xaxisSettings.range = [
+                    firstTimestamp,
+                    new Date(firstTimestamp.getTime() + 30000)
+                ];
+            }
+        }
+        
+        // Chart layout
+        const layout = {
+            title: 'Blood Glucose Readings',
+            xaxis: xaxisSettings,
+            yaxis: yaxisSettings,
+            shapes: [
+                {
+                    type: 'rect',
+                    xref: 'paper',
+                    yref: 'y',
+                    x0: 0,
+                    y0: 180,
+                    x1: 1,
+                    y1: 300,
+                    fillcolor: '#FADBD8',
+                    opacity: 0.2,
+                    line: {
+                        width: 0
+                    }
+                },
+                {
+                    type: 'rect',
+                    xref: 'paper',
+                    yref: 'y',
+                    x0: 0,
+                    y0: 70,
+                    x1: 1,
+                    y1: 180,
+                    fillcolor: '#D5F5E3',
+                    opacity: 0.2,
+                    line: {
+                        width: 0
+                    }
+                },
+                {
+                    type: 'rect',
+                    xref: 'paper',
+                    yref: 'y',
+                    x0: 0,
+                    y0: 40,
+                    x1: 1,
+                    y1: 70,
+                    fillcolor: '#FCF3CF',
+                    opacity: 0.2,
+                    line: {
+                        width: 0
+                    }
+                }
+            ],
+            showlegend: false,
+            margin: {
+                l: 50,
+                r: 20,
+                b: 60,
+                t: 40,
+                pad: 0
+            },
+            hovermode: 'closest',
+            hoverlabel: {
+                bgcolor: '#004494',
+                font: {
+                    color: 'white'
+                }
+            },
+            dragmode: isRealTimeMode ? 'pan' : 'zoom' // Set drag mode to pan for real-time
+        };
+        
+        // Chart configuration - ensure only horizontal scrolling in real-time mode
+        const config = {
+            responsive: true,
+            displayModeBar: false,
+            scrollZoom: isRealTimeMode ? 'x' : true // Only horizontal scrolling in real-time mode
+        };
+        
+        // Create or update chart
+        if (!plotlyChart) {
+            Plotly.newPlot(glucoseChart, traces, layout, config);
+            plotlyChart = glucoseChart;
+            
+            // Add event listener to lock Y-axis in real-time mode
+            if (isRealTimeMode) {
+                plotlyChart.on('plotly_relayout', function(eventData) {
+                    // If Y-axis range was changed, reset it to fixed range
+                    if (eventData['yaxis.range[0]'] !== undefined || 
+                        eventData['yaxis.range[1]'] !== undefined ||
+                        eventData['yaxis.autorange'] !== undefined) {
+                        Plotly.relayout(plotlyChart, {
+                            'yaxis.range': [40, 300],
+                            'yaxis.autorange': false
+                        });
+                    }
+                });
+            }
+        } else {
+            Plotly.react(glucoseChart, traces, layout, config);
+        }
+    }
+    
+    function updateStats(data) {
+        if (data.length === 0) return;
+        
+        // Current glucose
+        const currentGlucose = data[data.length - 1].glucose;
+        document.getElementById('current-glucose').textContent = currentGlucose;
+        
+        // Average glucose
+        const avgGlucose = (data.reduce((sum, d) => sum + d.glucose, 0) / data.length).toFixed(1);
+        document.getElementById('avg-glucose').textContent = avgGlucose;
+        
+        // Range
+        const minGlucose = Math.min(...data.map(d => d.glucose));
+        const maxGlucose = Math.max(...data.map(d => d.glucose));
+        document.getElementById('range-glucose').textContent = `${minGlucose} - ${maxGlucose}`;
+    }
+    
+    function updateInsights(data) {
+        if (data.length === 0) return;
+        
+        // Time in range
+        const inRangeCount = data.filter(d => d.glucose >= 70 && d.glucose <= 180).length;
+        const timeInRangePercent = Math.round((inRangeCount / data.length) * 100);
+        
+        document.getElementById('time-in-range-bar').style.width = `${timeInRangePercent}%`;
+        document.getElementById('time-in-range-value').textContent = `${timeInRangePercent}%`;
+        
+        // Hypo events
+        const hypoEvents = countEvents(data, d => d.glucose < 70);
+        document.getElementById('hypo-events-value').textContent = hypoEvents;
+        
+        // Hyper events
+        const hyperEvents = countEvents(data, d => d.glucose > 180);
+        document.getElementById('hyper-events-value').textContent = hyperEvents;
+        
+        // Glucose variability (standard deviation)
+        const mean = data.reduce((sum, d) => sum + d.glucose, 0) / data.length;
+        const variance = data.reduce((sum, d) => sum + Math.pow(d.glucose - mean, 2), 0) / data.length;
+        const stdDev = Math.sqrt(variance).toFixed(1);
+        
+        document.getElementById('variability-value').textContent = stdDev;
+    }
+    
+    function countEvents(data, conditionFn) {
+        // Count sequences of events that meet the condition
+        let eventCount = 0;
+        let inEvent = false;
+        
+        for (let i = 0; i < data.length; i++) {
+            const meetsCondition = conditionFn(data[i]);
+            
+            if (meetsCondition && !inEvent) {
+                eventCount++;
+                inEvent = true;
+            } else if (!meetsCondition) {
+                inEvent = false;
+            }
+        }
+        
+        return eventCount;
+    }
+    
+    function resetDisplay() {
+        currentPatientId = null;
+        glucoseData = [];
+        isRealTimeMode = false;
+        
+        // Hide panels
+        patientInfoPanel.classList.add('hidden');
+        dataInsightsPanel.classList.add('hidden');
+        
+        // Clear chart
+        if (plotlyChart) {
+            Plotly.purge(glucoseChart);
+            plotlyChart = null;
+        }
+        
+        // Reset UI controls to default state
+        updateControlUI(false, false, false);
+    }
+    
+    function resetZoom() {
+        if (plotlyChart) {
+            if (isRealTimeMode && glucoseData.length > 0) {
+                // For real-time mode, reset to the sliding window
+                const lastTimestamp = new Date(glucoseData[glucoseData.length - 1].timestamp);
+                const hourInMillis = 60 * 60 * 1000;
+                const startTime = new Date(lastTimestamp - timeRange * hourInMillis);
+                
+                Plotly.relayout(plotlyChart, {
+                    'xaxis.range': [startTime, lastTimestamp],
+                    'yaxis.range': [40, 300]
+                });
+            } else {
+                // For normal mode, auto-range x-axis
+                Plotly.relayout(plotlyChart, {
+                    'xaxis.autorange': true,
+                    'yaxis.range': [40, 300],
+                    'yaxis.autorange': false
+                });
+            }
+        }
+    }
+    
+    function toggleFullscreen() {
+        const chartContainer = document.querySelector('.chart-container');
+        
+        if (!document.fullscreenElement) {
+            if (chartContainer.requestFullscreen) {
+                chartContainer.requestFullscreen();
+            } else if (chartContainer.webkitRequestFullscreen) {
+                chartContainer.webkitRequestFullscreen();
+            } else if (chartContainer.msRequestFullscreen) {
+                chartContainer.msRequestFullscreen();
+            }
+            fullscreenButton.innerHTML = '<i class="fas fa-compress"></i>';
+        } else {
+            if (document.exitFullscreen) {
+                document.exitFullscreen();
+            } else if (document.webkitExitFullscreen) {
+                document.webkitExitFullscreen();
+            } else if (document.msExitFullscreen) {
+                document.msExitFullscreen();
+            }
+            fullscreenButton.innerHTML = '<i class="fas fa-expand"></i>';
+        }
+    }
+    
+    // Update UI controls based on patient state
+    function updateControlsBasedOnPatient(patientId) {
+        if (!patientStates[patientId]) {
+            patientStates[patientId] = {
+                isDataInitialized: false,
+                isFlowActive: false,
+                isAttackInProgress: false,
+                realtimeData: []
+            };
+        }
+        
+        const state = patientStates[patientId];
+        
+        // Update UI elements based on this patient's state
+        updateControlUI(
+            state.isDataInitialized, 
+            state.isFlowActive, 
+            state.isAttackInProgress
+        );
+        
+        // If this patient has an active data flow, restart it
+        if (state.isFlowActive) {
+            if (dataUpdateInterval) {
+                clearInterval(dataUpdateInterval);
+            }
+            
+            dataUpdateInterval = setInterval(() => {
+                addNewDataPoint(patientId);
+            }, 1000);
+        }
+    }
+    
+    // Update control UI elements based on states
+    function updateControlUI(isInitialized, isFlowActive, isAttackActive) {
+        // Initialize button
+        if (isInitialized) {
+            initializeBtn.innerHTML = '<i class="fas fa-database"></i> Initialized';
+            dataStatusDot.className = 'status-dot active';
+        } else {
+            initializeBtn.innerHTML = '<i class="fas fa-database"></i> Initialize';
+            dataStatusDot.className = 'status-dot inactive';
+        }
+        
+        // Toggle flow button
+        if (isFlowActive) {
+            toggleFlowBtn.innerHTML = '<i class="fas fa-pause"></i> Pause Data';
+            toggleFlowBtn.className = 'control-btn pause';
+            flowStatusDot.className = 'status-dot active';
+        } else {
+            toggleFlowBtn.innerHTML = '<i class="fas fa-play"></i> Start Data';
+            toggleFlowBtn.className = 'control-btn start';
+            flowStatusDot.className = 'status-dot inactive';
+        }
+        
+        // Attack button and status
+        attackBtn.disabled = isAttackActive;
+        attackStatusDot.className = isAttackActive ? 'status-dot pending' : 'status-dot inactive';
+    }
+    
+    // Control functions - all take patientId as a parameter
+    
+    // Initialize data for a specific patient
+    function initializeData(patientId) {
+        // Ensure patientId is valid and contains # symbol (indicating specific patient, not just type)
+        if (!patientId || !patientId.includes('#') || !patientStates[patientId] || patientStates[patientId].isDataInitialized) {
+            if (patientId && !patientId.includes('#')) {
+                alert('Please select a valid patient ID, not patient type');
+            }
+            return;
+        }
+        
+        // Show loading status
+        initializeBtn.disabled = true;
+        initializeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Initializing...';
+        dataStatusDot.className = 'status-dot pending';
+        
+        console.log(`Initializing patient data: ${patientId}`);
+        
+        // Check if this is a predefined patient (contains # symbol)
+        const isPredefinedPatient = patientId.includes('#');
+        
+        // For all patients, use server endpoint to initialize data
+        // This endpoint has special handling for predefined patients in the CSV
+        fetch(`/initialize_patient_data/${patientId}`, {
+            method: 'POST'
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Server error: ' + response.status);
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Initialization successful:', data);
+            
+            // Update patient state
+            patientStates[patientId].isDataInitialized = true;
+            
+            // Update UI
+            initializeBtn.disabled = false;
+            initializeBtn.innerHTML = '<i class="fas fa-database"></i> Initialized';
+            dataStatusDot.className = 'status-dot active';
+            
+            // Show data insights panel
+            dataInsightsPanel.classList.remove('hidden');
+            
+            // Get and display glucose data
+            fetchGlucoseData(patientId);
+            
+            // Notify user
+            alert('Data initialization successful!');
+        })
+        .catch(error => {
+            console.error('Error initializing patient data:', error);
+            
+            // Error reset UI
+            initializeBtn.disabled = false;
+            initializeBtn.innerHTML = '<i class="fas fa-database"></i> Initialize';
+            dataStatusDot.className = 'status-dot inactive';
+            
+            alert('Initialization failed, please try again.');
+        });
+    }
+    
+    // Toggle data flow state for a specific patient
+    function toggleDataFlow(patientId) {
+        if (!patientId || !patientStates[patientId]) return;
+        
+        if (!patientStates[patientId].isDataInitialized) {
+            alert('Please initialize data first');
+            return;
+        }
+        
+        if (patientStates[patientId].isFlowActive) {
+            // Pause data flow
+            stopDataFlow(patientId);
+        } else {
+            // Start data flow
+            startDataFlow(patientId);
+        }
+    }
+    
+    // Start data flow for a specific patient
+    function startDataFlow(patientId) {
+        if (!patientId || !patientStates[patientId]) return;
+        
+        // Update state
+        patientStates[patientId].isFlowActive = true;
+        
+        // Reset real-time data array when starting flow
+        patientStates[patientId].realtimeData = [];
+        
+        // Update UI
+        toggleFlowBtn.innerHTML = '<i class="fas fa-pause"></i> Pause Data';
+        toggleFlowBtn.className = 'control-btn pause';
+        flowStatusDot.className = 'status-dot active';
+        
+        // Clear any existing interval
+        if (dataUpdateInterval) {
+            clearInterval(dataUpdateInterval);
+        }
+        
+        // Add a new data point every 1 second (instead of 10 seconds)
+        dataUpdateInterval = setInterval(() => {
+            addNewDataPoint(patientId);
+        }, 1000);
+    }
+    
+    // Stop data flow for a specific patient
+    function stopDataFlow(patientId) {
+        if (!patientId || !patientStates[patientId]) return;
+        
+        // Update state
+        patientStates[patientId].isFlowActive = false;
+        
+        // Update UI
+        toggleFlowBtn.innerHTML = '<i class="fas fa-play"></i> Start Data';
+        toggleFlowBtn.className = 'control-btn start';
+        flowStatusDot.className = 'status-dot inactive';
+        
+        // Clear data update interval
+        if (dataUpdateInterval) {
+            clearInterval(dataUpdateInterval);
+            dataUpdateInterval = null;
+        }
+    }
+    
+    // Add a new data point for a specific patient
+    function addNewDataPoint(patientId) {
+        if (!patientId || !patientStates[patientId] || !patientStates[patientId].isFlowActive || 
+            !patientStates[patientId].isDataInitialized) {
+            return;
+        }
+        
+        // Get last glucose value to create variation
+        let lastGlucose = 100; // Default starting value
+        const patientData = patientStates[patientId].realtimeData;
+        
+        if (patientData && patientData.length > 0) {
+            lastGlucose = patientData[patientData.length - 1].glucose;
+        }
+        
+        // Add some random variation to make the chart more interesting
+        // Generate a random value between -5 and +5
+        const variation = Math.random() * 10 - 5;
+        let newGlucose = Math.round(lastGlucose + variation);
+        
+        // Keep values within reasonable bounds
+        newGlucose = Math.max(40, Math.min(300, newGlucose));
+        
+        // Create a new data point with the calculated glucose value
+        const newDataPoint = {
+            id: Math.floor(Math.random() * 10000),
+            patient_id: patientId,
+            glucose: newGlucose,
+            timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+        };
+        
+        // Add to local data for current view
+        glucoseData.push(newDataPoint);
+        
+        // ALWAYS add new points to the realtimeData array
+        if (!patientStates[patientId].realtimeData) {
+            patientStates[patientId].realtimeData = [newDataPoint];
+        } else {
+            patientStates[patientId].realtimeData.push(newDataPoint);
+        }
+        
+        // For non-real-time mode: Remove oldest data points if exceeding time range
+        if (!isRealTimeMode) {
+            const maxDataPoints = timeRange * 12; // 12 readings per hour
+            if (glucoseData.length > maxDataPoints) {
+                glucoseData = glucoseData.slice(-maxDataPoints);
+            }
+        }
+        
+        // Determine which data to use for update
+        let updateData;
+        if (isRealTimeMode) {
+            // In real-time mode, only show the data points generated after "Start Data"
+            updateData = [...patientStates[patientId].realtimeData];
+        } else {
+            // In regular mode, show all current data
+            updateData = [...glucoseData];
+        }
+        
+        // Update visualizations
+        updateChart(updateData);
+        updateStats(updateData);
+        updateInsights(updateData);
+        
+        // If in real-time mode, auto-scroll the chart to show the latest data
+        if (isRealTimeMode && plotlyChart && updateData.length > 0) {
+            // Get all timestamps and sort them to find the earliest and latest
+            const timestamps = updateData.map(d => new Date(d.timestamp));
+            const firstTimestamp = new Date(Math.min(...timestamps));
+            const lastTimestamp = new Date(Math.max(...timestamps));
+            
+            // Create a window that shows all data plus some padding
+            const endTime = new Date(lastTimestamp.getTime() + 10000); // Add 10 seconds buffer
+            
+            // Make sure we maintain a minimum window size (30 seconds)
+            let startTime;
+            if (endTime - firstTimestamp < 30000) {
+                startTime = new Date(endTime.getTime() - 30000);
+            } else {
+                startTime = firstTimestamp;
+            }
+            
+            // Update the chart's x-axis
+            Plotly.relayout(plotlyChart, {
+                'xaxis.range': [startTime, endTime],
+                'yaxis.range': [40, 300]  // Ensure Y-axis stays fixed
+            });
+        }
+        
+        // Send data to server for persistence
+        fetch('/mock_update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                patient_id: patientId,
+                data: [newDataPoint]
+            })
+        }).catch(error => console.error('Error updating data:', error));
+    }
+    
+    // Launch attack for a specific patient
+    function launchAttack(patientId) {
+        if (!patientId || !patientStates[patientId] || 
+            !patientStates[patientId].isDataInitialized ||  // Don't allow attacks on uninitialized patients
+            patientStates[patientId].isAttackActive) {
+            return;
+        }
+        
+        // Set attack status
+        patientStates[patientId].isAttackActive = true;
+        
+        // Update UI
+        attackStatusDot.className = 'status-dot pending';
+        attackBtn.disabled = true;
+        
+        // Show attack overlay
+        attackOverlay.classList.add('active');
+        attackMessage.textContent = 'Executing attack operation...';
+        attackStatus.textContent = '';
+        attackStatus.className = 'attack-status';
+        
+        // Simulate attack process (now just 3 seconds instead of 10 for faster feedback)
+        setTimeout(() => {
+            // Randomly determine if attack is successful
+            const isSuccess = Math.random() > 0.5;
+            
+            if (isSuccess) {
+                attackStatusDot.className = 'status-dot active';
+                attackStatus.textContent = 'Attack Successful!';
+                attackStatus.className = 'attack-status success';
+                
+                // Get current data for context
+                let currentRealtimeData = [];
+                if (patientStates[patientId].realtimeData && patientStates[patientId].realtimeData.length > 0) {
+                    currentRealtimeData = [...patientStates[patientId].realtimeData];
+                }
+                
+                // Get last glucose value to make attack value somewhat related
+                let lastGlucose = 100;
+                if (currentRealtimeData.length > 0) {
+                    lastGlucose = currentRealtimeData[currentRealtimeData.length - 1].glucose;
+                }
+                
+                // Generate attack data points - create a sequence of 3 rapid extreme values
+                for (let i = 0; i < 3; i++) {
+                    // If last value was high, go low, and vice versa for more dramatic effect
+                    let extremeValue;
+                    if (i === 0) {
+                        // First point: go to opposite extreme of last value
+                        extremeValue = lastGlucose > 150 ? 40 : 300;
+                    } else {
+                        // Subsequent points: alternate between high and low
+                        const prevValue = currentRealtimeData[currentRealtimeData.length - 1].glucose;
+                        extremeValue = prevValue > 150 ? 40 : 300;
+                    }
+                    
+                    const attackDataPoint = {
+                        id: Math.floor(Math.random() * 10000),
+                        patient_id: patientId,
+                        glucose: extremeValue,
+                        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19)
+                    };
+                    
+                    // Add to local data
+                    glucoseData.push(attackDataPoint);
+                    
+                    // Also add to real-time data if data flow is active
+                    if (patientStates[patientId].isFlowActive) {
+                        if (!patientStates[patientId].realtimeData) {
+                            patientStates[patientId].realtimeData = [attackDataPoint];
+                        } else {
+                            patientStates[patientId].realtimeData.push(attackDataPoint);
+                        }
+                        currentRealtimeData.push(attackDataPoint);
+                    }
+                    
+                    // Send data to server
+                    fetch('/mock_update', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            patient_id: patientId,
+                            data: [attackDataPoint]
+                        })
+                    }).catch(error => console.error('Error updating data:', error));
+                }
+                
+                // Determine which data to use for update
+                let updateData;
+                if (isRealTimeMode) {
+                    // In real-time mode, only show the data points generated after "Start Data"
+                    updateData = [...patientStates[patientId].realtimeData];
+                } else {
+                    // In regular mode, show all current data
+                    updateData = [...glucoseData];
+                }
+                
+                // Update visualizations
+                updateChart(updateData);
+                updateStats(updateData);
+                updateInsights(updateData);
+                
+            } else {
+                attackStatusDot.className = 'status-dot inactive';
+                attackStatus.textContent = 'Attack Failed';
+                attackStatus.className = 'attack-status failure';
+            }
+            
+            // Hide attack overlay after 2 seconds and reset state
+            setTimeout(() => {
+                attackOverlay.classList.remove('active');
+                attackBtn.disabled = false;
+                patientStates[patientId].isAttackActive = false;
+            }, 2000);
+        }, 3000); // Reduced from 10s to 3s for faster feedback
+    }
+    
+    // Add the UI for adding new patients
+    function setupAddPatientUI() {
+        // Create a new button after the patient selector
+        const patientSelectionDiv = document.querySelector('.patient-selection');
+        const addPatientBtn = document.createElement('button');
+        addPatientBtn.id = 'add-patient-btn';
+        addPatientBtn.className = 'control-btn add-patient';
+        addPatientBtn.innerHTML = '<i class="fas fa-user-plus"></i> Add Patient';
+        
+        // Insert after patient selector
+        patientSelectionDiv.insertBefore(addPatientBtn, document.querySelector('.control-buttons'));
+        
+        // Add styles for the new button
+        const style = document.createElement('style');
+        style.textContent = `
+            .control-btn.add-patient {
+                background-color: #9b59b6;
+                margin: 10px 0;
+                width: 100%;
+            }
+            .control-btn.add-patient:hover {
+                background-color: #8e44ad;
+            }
+            
+            .patient-modal {
+                display: none;
+                position: fixed;
+                z-index: 2000;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0,0,0,0.7);
+            }
+            
+            .patient-modal-content {
+                background-color: white;
+                margin: 10% auto;
+                padding: 20px;
+                width: 50%;
+                max-width: 500px;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            }
+            
+            .patient-modal h3 {
+                margin-top: 0;
+                color: var(--primary-color);
+            }
+            
+            .patient-form-group {
+                margin-bottom: 15px;
+            }
+            
+            .patient-form-group label {
+                display: block;
+                margin-bottom: 5px;
+                font-weight: 600;
+            }
+            
+            .patient-form-group input {
+                width: 100%;
+                padding: 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+            }
+            
+            .patient-form-group select {
+                width: 100%;
+                padding: 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+            }
+            
+            .patient-form-buttons {
+                text-align: right;
+                margin-top: 20px;
+            }
+            
+            .patient-form-buttons button {
+                padding: 8px 16px;
+                margin-left: 10px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            
+            .patient-form-buttons .cancel-btn {
+                background-color: #e74c3c;
+                color: white;
+            }
+            
+            .patient-form-buttons .add-btn {
+                background-color: var(--success-color);
+                color: white;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Create modal for adding patient
+        const patientModal = document.createElement('div');
+        patientModal.className = 'patient-modal';
+        patientModal.id = 'patient-modal';
+        patientModal.innerHTML = `
+            <div class="patient-modal-content">
+                <h3>Add New Patient</h3>
+                <form id="add-patient-form">
+                    <div class="patient-form-group">
+                        <label for="patient-type-input">Patient Type:</label>
+                        <select id="patient-type-input" required>
+                            <option value="">Select type</option>
+                            <option value="adolescent">Adolescent</option>
+                            <option value="adult">Adult</option>
+                            <option value="child">Child</option>
+                        </select>
+                    </div>
+                    <div class="patient-form-group">
+                        <label for="patient-id">Patient ID:</label>
+                        <input type="text" id="patient-id-input" placeholder="e.g. 012" required>
+                        <small>Note: ID will be prefixed with type (e.g. adult#012)</small>
+                    </div>
+                    <div class="patient-form-group">
+                        <label for="patient-age">Age:</label>
+                        <input type="number" id="patient-age-input" min="1" max="120" required>
+                    </div>
+                    <div class="patient-form-group">
+                        <label for="patient-weight">Weight (kg):</label>
+                        <input type="number" id="patient-weight-input" min="1" max="300" step="0.1" required>
+                    </div>
+                    <div class="patient-form-group">
+                        <label for="patient-height">Height (cm):</label>
+                        <input type="number" id="patient-height-input" min="30" max="250" required>
+                    </div>
+                    <div class="patient-form-group">
+                        <label for="patient-diabetes">Has Diabetes:</label>
+                        <select id="patient-diabetes-input">
+                            <option value="false">No</option>
+                            <option value="true">Yes</option>
+                        </select>
+                    </div>
+                    <div class="patient-form-group" id="diabetes-type-group" style="display: none;">
+                        <label for="patient-diabetes-type">Diabetes Type:</label>
+                        <select id="patient-diabetes-type-input">
+                            <option value="1">Type 1</option>
+                            <option value="2">Type 2</option>
+                        </select>
+                    </div>
+                    <div class="patient-form-buttons">
+                        <button type="button" class="cancel-btn" id="cancel-patient-btn">Cancel</button>
+                        <button type="submit" class="add-btn">Add Patient</button>
+                    </div>
+                </form>
+            </div>
+        `;
+        document.body.appendChild(patientModal);
+        
+        // Add event listeners for the modal
+        addPatientBtn.addEventListener('click', function() {
+            document.getElementById('patient-modal').style.display = 'block';
+        });
+        
+        document.getElementById('cancel-patient-btn').addEventListener('click', function() {
+            document.getElementById('patient-modal').style.display = 'none';
+        });
+        
+        // Show/hide diabetes type based on selection
+        document.getElementById('patient-diabetes-input').addEventListener('change', function() {
+            document.getElementById('diabetes-type-group').style.display = 
+                this.value === 'true' ? 'block' : 'none';
+        });
+        
+        // Form submission
+        document.getElementById('add-patient-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            addNewPatient(e);
+        });
+    }
+    
+    // Add a new patient to the system
+    function addNewPatient() {
+        const patientType = document.getElementById('patient-type-input').value;
+        const patientIdInput = document.getElementById('patient-id-input').value;
+        const age = parseInt(document.getElementById('patient-age-input').value) || 30;
+        const weight = parseFloat(document.getElementById('patient-weight-input').value) || 70;
+        const height = parseInt(document.getElementById('patient-height-input').value) || 170;
+        const hasDiabetes = document.getElementById('patient-diabetes-input').value === 'true';
+        const diabetesType = hasDiabetes ? parseInt(document.getElementById('patient-diabetes-type-input').value) : null;
+        
+        // Check if patient type is selected
+        if (!patientType) {
+            alert('Please select a patient type');
+            return;
+        }
+        
+        // Validate patient ID
+        if (!patientIdInput.trim()) {
+            alert('Please enter a patient ID');
+            return;
+        }
+        
+        // Format patient ID with type prefix
+        const patientId = patientType + '#' + patientIdInput;
+        
+        // Check if patient ID already exists
+        if (patientStates[patientId]) {
+            alert('A patient with this ID already exists.');
+            return;
+        }
+        
+        // Create patient data object
+        const patientData = {
+            id: patientId,
+            type: patientType,
+            age: age,
+            weight: weight,
+            height: height,
+            has_diabetes: hasDiabetes,
+            diabetes_type: diabetesType
+        };
+        
+        // Add loading state
+        const addBtn = document.querySelector('.add-btn');
+        const originalText = addBtn.textContent;
+        addBtn.disabled = true;
+        addBtn.textContent = 'Adding...';
+        
+        // Send to server
+        fetch('/patient/add', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(patientData)
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Server returned ' + response.status);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                // Hide modal
+                document.getElementById('patient-modal').style.display = 'none';
+                
+                // Initialize patient state
+                patientStates[patientId] = {
+                    isDataInitialized: false,
+                    isFlowActive: false,
+                    isAttackActive: false,
+                    realtimeData: []
+                };
+                
+                // Update the patient list if the current type matches
+                const currentSelectedType = document.getElementById('patient-type-selector').value;
+                if (currentSelectedType === patientType) {
+                    // Add to patient selector
+                    const patientSelector = document.getElementById('patient-selector');
+                    const option = document.createElement('option');
+                    option.value = patientId;
+                    option.text = patientId;
+                    patientSelector.appendChild(option);
+                    
+                    // Select the new patient
+                    patientSelector.value = patientId;
+                    patientSelector.dispatchEvent(new Event('change'));
+                } else {
+                    alert(`Patient ${patientId} added successfully! Change the patient type to "${patientType}" to see this patient.`);
+                }
+                
+                // Reset form
+                document.getElementById('add-patient-form').reset();
+                document.getElementById('diabetes-type-group').style.display = 'none';
+            } else {
+                alert('Failed to add patient: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => {
+            console.error('Error adding patient:', error);
+            alert('Error adding patient: ' + error.message);
+        })
+        .finally(() => {
+            // Reset button state
+            addBtn.disabled = false;
+            addBtn.textContent = originalText;
+        });
+    }
+}); 

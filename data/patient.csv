@@ -1,0 +1,16 @@
+Name,type,age,weight,height,has_diabetes
+adolescent#001,adolescent,18,68.7,170.5,1
+adolescent#002,adolescent,17,51.0,165.2,0
+adolescent#003,adolescent,16,44.8,160.4,1
+adolescent#004,adolescent,17,49.6,163.8,0
+adolescent#005,adolescent,16,47.1,162.5,1
+adult#001,adult,35,102.3,182.4,0
+adult#002,adult,42,111.1,188.5,1
+adult#003,adult,38,81.6,175.3,0
+adult#004,adult,45,63.0,172.8,1
+adult#005,adult,40,94.1,180.2,0
+child#001,child,10,34.6,135.2,1
+child#002,child,8,28.5,125.4,0
+child#003,child,11,41.2,142.6,1
+child#004,child,9,35.5,130.8,0
+child#005,child,7,37.8,128.5,1

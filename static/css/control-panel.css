@@ -1,0 +1,265 @@
+/* Control Panel Styles */
+.control-panel-wrapper {
+    position: fixed;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 1000;
+    display: flex;
+    transition: all 0.3s ease;
+}
+
+.control-panel-tab {
+    background-color: var(--primary-color);
+    color: white;
+    padding: 15px 10px;
+    writing-mode: vertical-lr;
+    text-orientation: mixed;
+    cursor: pointer;
+    border-radius: 8px 0 0 8px;
+    box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+
+.control-panel-tab i {
+    margin-bottom: 8px;
+    font-size: 1.2rem;
+}
+
+.control-panel {
+    width: 320px;
+    background-color: white;
+    border-radius: 8px 0 0 8px;
+    box-shadow: -2px 0 15px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+}
+
+.control-panel.open {
+    transform: translateX(0);
+}
+
+.control-panel-header {
+    background-color: var(--primary-color);
+    color: white;
+    padding: 15px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.control-panel-header h3 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.control-panel-close {
+    background: none;
+    border: none;
+    color: white;
+    cursor: pointer;
+    font-size: 1.2rem;
+}
+
+.control-panel-content {
+    padding: 20px;
+}
+
+.control-panel-section {
+    margin-bottom: 20px;
+}
+
+.control-panel-section h4 {
+    margin: 0 0 10px 0;
+    color: var(--primary-color);
+    font-size: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 5px;
+}
+
+.patient-selector {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    margin-bottom: 15px;
+    background-color: var(--background-color);
+}
+
+.control-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.control-button {
+    padding: 10px 15px;
+    border: none;
+    border-radius: var(--border-radius);
+    background-color: var(--primary-color);
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.control-button i {
+    margin-right: 8px;
+}
+
+.control-button.initialize {
+    background-color: var(--secondary-color);
+}
+
+.control-button.initialize:hover {
+    background-color: #0099b8;
+}
+
+.control-button.start {
+    background-color: var(--success-color);
+}
+
+.control-button.start:hover {
+    background-color: #27ae60;
+}
+
+.control-button.pause {
+    background-color: var(--warning-color);
+}
+
+.control-button.pause:hover {
+    background-color: #d35400;
+}
+
+.control-button.attack {
+    background-color: var(--danger-color);
+    grid-column: 1 / -1;
+}
+
+.control-button.attack:hover {
+    background-color: #c0392b;
+}
+
+.control-button:disabled {
+    background-color: #a0a0a0;
+    cursor: not-allowed;
+}
+
+.status-box {
+    background-color: var(--background-color);
+    border-radius: var(--border-radius);
+    padding: 15px;
+    margin-top: 15px;
+}
+
+.status-box h4 {
+    margin: 0 0 10px 0;
+    color: var(--primary-color);
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.status-indicator:last-child {
+    margin-bottom: 0;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-dot.active {
+    background-color: var(--success-color);
+}
+
+.status-dot.inactive {
+    background-color: var(--danger-color);
+}
+
+.status-dot.pending {
+    background-color: var(--warning-color);
+}
+
+.attack-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+}
+
+.attack-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.attack-spinner {
+    width: 60px;
+    height: 60px;
+    border: 5px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: var(--accent-color);
+    animation: spin 1s ease-in-out infinite;
+    margin-bottom: 20px;
+}
+
+.attack-message {
+    color: white;
+    font-size: 1.2rem;
+    text-align: center;
+    max-width: 400px;
+}
+
+.attack-status {
+    margin-top: 20px;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+.attack-status.success {
+    color: var(--success-color);
+}
+
+.attack-status.failure {
+    color: var(--danger-color);
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 768px) {
+    .control-panel {
+        width: 280px;
+    }
+    
+    .control-panel-tab {
+        padding: 10px 8px;
+    }
+} 

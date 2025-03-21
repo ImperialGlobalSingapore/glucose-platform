@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glucose Simulation Platform | Imperial Global Singapore</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="static/css/styles.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body>
+    <header>
+        <div class="header-container">
+            <div class="logo">
+                <h1>Glucose Simulation Platform</h1>
+                <p>Imperial Global Singapore</p>
+            </div>
+            <nav>
+                <ul>
+                    <li><a href="#" class="active">Dashboard</a></li>
+                    <li><a href="#">About</a></li>
+                    <li><a href="#">Research</a></li>
+                    <li><a href="#">Contact</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <section class="dashboard">
+            <div class="sidebar">
+                <div class="patient-selection">
+                    <h2>Patient Control Center</h2>
+                    <div class="selection-row">
+                        <select id="patient-type-selector" class="patient-type-selector">
+                            <option value="">Type</option>
+                            <option value="adolescent">Adolescent</option>
+                            <option value="adult">Adult</option>
+                            <option value="child">Child</option>
+                        </select>
+                        <select id="patient-selector" class="patient-selector">
+                            <option value="">Select a patient</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-buttons">
+                        <button id="initialize-btn" class="control-btn initialize">
+                            <i class="fas fa-database"></i> Initialize
+                        </button>
+                        <button id="toggle-flow-btn" class="control-btn start">
+                            <i class="fas fa-power-off"></i> Activate
+                        </button>
+                        <button id="attack-btn" class="control-btn attack">
+                            <i class="fas fa-bolt"></i> Launch Attack
+                        </button>
+                    </div>
+                    
+                    <div class="status-indicators">
+                        <div class="status-indicator">
+                            <div id="data-status-dot" class="status-dot inactive"></div>
+                            <span>Data Initialized</span>
+                        </div>
+                        <div class="status-indicator">
+                            <div id="flow-status-dot" class="status-dot inactive"></div>
+                            <span>Real-time Flow</span>
+                        </div>
+                        <div class="status-indicator">
+                            <div id="attack-status-dot" class="status-dot inactive"></div>
+                            <span>Attack Status</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="patient-info hidden" id="patient-info-panel">
+                    <h2>Patient Information</h2>
+                    <div class="info-card">
+                        <div class="info-row">
+                            <span class="info-label">Patient ID:</span>
+                            <span class="info-value" id="patient-id">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Age:</span>
+                            <span class="info-value" id="patient-age">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Weight:</span>
+                            <span class="info-value" id="patient-weight">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Height:</span>
+                            <span class="info-value" id="patient-height">-</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Diabetes:</span>
+                            <span class="info-value" id="patient-diabetes">-</span>
+                        </div>
+                        <div class="info-row hidden" id="diabetes-type-row">
+                            <span class="info-label">Diabetes Type:</span>
+                            <span class="info-value" id="patient-diabetes-type">-</span>
+                        </div>
+                    </div>
+                    
+                    <div class="glucose-stats">
+                        <div class="stat-card">
+                            <div class="stat-title">Current Glucose</div>
+                            <div class="stat-value" id="current-glucose">-</div>
+                            <div class="stat-unit">mg/dL</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-title">Average</div>
+                            <div class="stat-value" id="avg-glucose">-</div>
+                            <div class="stat-unit">mg/dL</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-title">Range</div>
+                            <div class="stat-value" id="range-glucose">-</div>
+                            <div class="stat-unit">mg/dL</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="main-content">
+                <div class="chart-container">
+                    <div class="chart-header">
+                        <h2>Glucose Trends</h2>
+                        <div class="chart-controls">
+                            <button id="zoom-reset" class="chart-btn">
+                                <i class="fas fa-home"></i>
+                            </button>
+                            <button id="toggle-fullscreen" class="chart-btn">
+                                <i class="fas fa-expand"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="glucose-chart" class="chart"></div>
+                    <div class="chart-legend">
+                        <div class="legend-item">
+                            <span class="legend-color high"></span>
+                            <span>High (&gt;180 mg/dL)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color normal"></span>
+                            <span>Normal (70-180 mg/dL)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color low"></span>
+                            <span>Low (&lt;70 mg/dL)</span>
+                        </div>
+                    </div>
+                    
+                    <div class="time-controls">
+                        <h3>Time Range</h3>
+                        <div class="time-buttons">
+                            <button class="time-btn" data-hours="real-time">Real-time</button>
+                            <button class="time-btn active" data-hours="3">3 Hours</button>
+                            <button class="time-btn" data-hours="6">6 Hours</button>
+                            <button class="time-btn" data-hours="12">12 Hours</button>
+                            <button class="time-btn" data-hours="24">24 Hours</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="data-insights hidden" id="data-insights-panel">
+                    <h2>Data Insights</h2>
+                    <div class="insights-container">
+                        <div class="insight-card" id="insight-time-in-range">
+                            <h3>Time in Range</h3>
+                            <div class="progress-container">
+                                <div class="progress-bar">
+                                    <div class="progress" id="time-in-range-bar" style="width: 0%"></div>
+                                </div>
+                                <div class="progress-value" id="time-in-range-value">0%</div>
+                            </div>
+                        </div>
+                        <div class="insight-card" id="insight-hypo-events">
+                            <h3>Hypoglycemic Events</h3>
+                            <div class="insight-value" id="hypo-events-value">0</div>
+                            <div class="insight-description">Events below 70 mg/dL</div>
+                        </div>
+                        <div class="insight-card" id="insight-hyper-events">
+                            <h3>Hyperglycemic Events</h3>
+                            <div class="insight-value" id="hyper-events-value">0</div>
+                            <div class="insight-description">Events above 180 mg/dL</div>
+                        </div>
+                        <div class="insight-card" id="insight-variability">
+                            <h3>Glucose Variability</h3>
+                            <div class="insight-value" id="variability-value">0</div>
+                            <div class="insight-description">Standard deviation (mg/dL)</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Attack overlay -->
+    <div id="attack-overlay" class="attack-overlay">
+        <div class="attack-spinner"></div>
+        <div id="attack-message" class="attack-message">Executing attack operation...</div>
+        <div id="attack-status" class="attack-status"></div>
+    </div>
+
+    <footer>
+        <div class="footer-container">
+            <div class="footer-section">
+                <h3>Glucose Simulation Platform</h3>
+                <p>A project of Imperial Global Singapore</p>
+            </div>
+            <div class="footer-section">
+                <h3>Quick Links</h3>
+                <ul>
+                    <li><a href="#">Home</a></li>
+                    <li><a href="#">Documentation</a></li>
+                    <li><a href="#">Research Papers</a></li>
+                    <li><a href="#">Contact</a></li>
+                </ul>
+            </div>
+            <div class="footer-section">
+                <h3>Contact Information</h3>
+                <p>Imperial Global Singapore</p>
+                <p>Email: contact@imperial-singapore.edu</p>
+                <p>Phone: +65 1234 5678</p>
+            </div>
+            <div class="footer-section">
+                <h3>Follow Us</h3>
+                <div class="social-icons">
+                    <a href="#"><i class="fab fa-twitter"></i></a>
+                    <a href="#"><i class="fab fa-facebook"></i></a>
+                    <a href="#"><i class="fab fa-linkedin"></i></a>
+                    <a href="#"><i class="fab fa-instagram"></i></a>
+                </div>
+            </div>
+        </div>
+        <div class="copyright">
+            <p>&copy; 2023 Imperial Global Singapore. All rights reserved.</p>
+        </div>
+    </footer>
+    
+    <script src="static/js/main.js"></script>
+</body>
+</html> 
