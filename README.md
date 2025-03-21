@@ -2,7 +2,13 @@
 
 A real-time glucose monitoring and simulation platform.
 
-![Architecture Diagram](architecture_diagram.svg)
+## Platform Demo
+
+![Platform Demo](docs/assets/platform.gif)
+
+## Architecture Diagram
+
+![Architecture Diagram](docs/assets/architecture_diagram.svg)
 
 ## System Overview
 
